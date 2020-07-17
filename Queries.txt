@@ -1,0 +1,297 @@
+
+
+/********************QUERY 1****************************************/
+/*******************************************************************/
+/*In the 10 countries with more active customers, what is the ******/
+average revenue per customer?***************************************/
+/*******************************************************************/
+
+WITH countries_more_cust
+AS
+  (
+          SELECT   c2.country_id,
+                   c2.country           AS country_name,
+                   COUNT(c.customer_id) AS num_customers
+          FROM     customer c
+          JOIN     address a
+          ON       c.address_id = a.address_id
+          AND      c.active = 1
+          JOIN     city c1
+          ON       a.city_id = c1.city_id
+          JOIN     country c2
+          ON       c1.country_id = c2.country_id
+          GROUP BY 1,
+                   2
+          ORDER BY 3 DESC
+          LIMIT    10),
+sum_amount_cust
+AS
+  (
+          SELECT   c.customer_id,
+                   SUM(p.amount) AS amount_per_cust
+          FROM      payment p
+          JOIN     customer c
+          ON       c.customer_id = p.customer_id
+          GROUP BY 1)
+SELECT    c2.country_name,
+          c2.num_customers,
+          ROUND(AVG(s.amount_per_cust),2) AS payment_average_country
+FROM      sum_amount_cust s
+JOIN      customer c
+ON        s.customer_id = c.customer_id
+JOIN      address a
+ON        c.address_id = a.address_id
+AND       c.active = 1
+JOIN      city c1
+ON        a.city_id = c1.city_id
+JOIN      countries_more_cust c2
+ON        c1.country_id = c2.country_id
+GROUP BY  1,
+          2
+ORDER BY  2 DESC;
+
+
+ /********************QUERY 2****************************************/
+ /*******************************************************************/
+ /*Who are the 10 actors with more total revenue for the company?****/
+ /*Evolution of these actors in terms of total payments per month,***/
+ in a scale from 1 to 10 inside this group***************************/
+ /*******************************************************************/
+
+WITH payments_month_act
+AS
+  (
+          SELECT   DATE_TRUNC('month', p.payment_date) AS month,
+                   t1.actor_name                       AS actor_name,
+                   SUM(p.amount)                       AS pay_amount
+          FROM     payment p
+          JOIN     rental r
+          ON       p.rental_id = r.rental_id
+          JOIN     inventory i
+          ON       r.inventory_id = i.inventory_id
+          JOIN     film f
+          ON       i.film_id = f.film_id
+          JOIN     film_actor f1
+          ON       f.film_id = f1.film_id
+          JOIN
+             (
+                   SELECT   a.actor_id,
+                            CONCAT(a.first_name,' ',a.last_name) AS actor_name,
+                            SUM(p.amount)                        AS total_amount
+                   FROM     payment p
+                   JOIN     rental r
+                   ON       p.rental_id = r.rental_id
+                   JOIN     inventory i
+                   ON       r.inventory_id = i.inventory_id
+                   JOIN     film f
+                   ON       i.film_id = f.film_id
+                   JOIN     film_actor fa
+                   ON       f.film_id = fa.film_id
+                   JOIN     actor a
+                   ON       fa.actor_id = a.actor_id
+                   GROUP BY 1,
+                            2
+                   ORDER BY 3 DESC
+                   LIMIT 10) t1
+          ON       t1.actor_id = f1.actor_id
+          GROUP BY 1,
+                   2
+          ORDER BY 2,
+                   1),
+  ntile_payment
+AS
+  (
+          SELECT   pma.month, pma.actor_name, pma.pay_amount,
+                   NTILE(10) OVER
+                   (PARTITION BY pma.month ORDER BY pma.pay_amount) AS ntile_10
+          FROM     payments_month_act                               AS pma
+          ORDER BY 2,
+                   1)
+SELECT    SUBSTR(CAST(np.month AS VARCHAR),1,7)          AS month,
+          np.actor_name, np.ntile_10,
+          LAG(ntile_10) OVER
+          (PARTITION BY np.actor_name ORDER BY np.month) AS lead_ntile,
+ 	        ntile_10-LAG(ntile_10) OVER
+          (PARTITION BY np.actor_name ORDER BY np.month) AS difference_ntile
+FROM      ntile_payment AS np;
+
+
+
+   /********************QUERY 3****************************************/
+   /*******************************************************************/
+   /*For the rantings NC-17' and 'R', What are the three categories ***/
+   /*with more and less rentals?***************************************/
+   /*For these six categories, what was the number of rentals**********/
+   /*per day of week?**************************************************/
+  /*******************************************************************/
+
+WITH category_most_rent
+AS
+ (
+          SELECT   c.category_id,
+                   c.name              AS category_name,
+                   COUNT(r.rental_id)  AS total_rental
+          FROM     rental r
+          JOIN     inventory i
+          ON       r.inventory_id = i.inventory_id
+          JOIN     film f
+          ON       f.film_id = i.film_id
+          AND      f.rating IN ('NC-17','R')
+          JOIN     film_category fc
+          ON       fc.film_id = f.film_id
+          JOIN     category c
+          ON       c.category_id = fc.category_id
+          GROUP BY 1,
+                   2
+          ORDER BY 3 DESC
+          LIMIT    3),
+  category_least_rent
+AS
+  (
+          SELECT   c.category_id,
+                   c.name             AS category_name,
+                   COUNT(r.rental_id) AS total_rental
+          FROM     rental r
+          JOIN     inventory i
+          ON       r.inventory_id = i.inventory_id
+          JOIN     film f
+          ON       f.film_id = i.film_id
+          AND      f.rating IN ('NC-17','R')
+          JOIN     film_category fc
+          ON       fc.film_id = f.film_id
+          JOIN     category c
+          ON       c.category_id = fc.category_id
+          GROUP BY 1,
+                   2
+          ORDER BY 3 ASC
+          LIMIT    3),
+  category_most_least_rent
+AS
+  (
+          SELECT   *
+          FROM     category_most_rent
+          UNION
+          SELECT   *
+          FROM     category_least_rent),
+  rents_per_dow_cat
+AS
+  (
+          SELECT   DATE_PART('dow',r.rental_date) AS week_day,
+                   c.category_name,
+                   count(r.rental_id)             AS total_rents
+          FROM     rental r
+          JOIN     inventory i
+          ON       r.inventory_id = i.inventory_id
+          JOIN     film f
+          ON       f.film_id = i.film_id
+          AND      f.rating IN ('NC-17','R')
+          JOIN     film_category fc
+          ON       fc.film_id = f.film_id
+          JOIN     category_most_least_rent c
+          ON       c.category_id = fc.category_id
+          GROUP BY 1,
+                  2)
+SELECT    category_name,
+          SUM(CASE WHEN week_day = 0 THEN total_rents END) AS sunday,
+          SUM(CASE WHEN week_day = 1 THEN total_rents END) AS monday,
+          SUM(CASE WHEN week_day = 2 THEN total_rents END) AS tuesday,
+          SUM(CASE WHEN week_day = 3 THEN total_rents END) AS wednesday,
+          SUM(CASE WHEN week_day = 4 THEN total_rents END) AS thursday,
+          SUM(CASE WHEN week_day = 5 THEN total_rents END) AS friday,
+          SUM(CASE WHEN week_day = 6 THEN total_rents END) AS saturday,
+   	      SUM(total_rents)
+FROM     rents_per_dow_cat
+GROUP BY 1
+ORDER BY 9 DESC;
+
+    /********************QUERY 4****************************************/
+    /*******************************************************************/
+    /*What is the category with the biggest difference of amount *******/
+    /*of payments between the store 1 and the store 2? According the ***/
+    /*amount of payments per day, compare the Box Plots for this *******/
+    /*category between the two stores. *********************************/
+    /*******************************************************************/
+
+WITH amount_category_store
+AS
+  (
+          SELECT   c.category_id,
+                   c.name AS category_name,
+                   SUM(CASE WHEN i.store_id = 1 THEN p.amount END)  AS amount_store_1,
+                   SUM(CASE WHEN i.store_id = 2 THEN p.amount END)  AS amount_store_2,
+                   ABS(SUM(CASE WHEN i.store_id = 1 THEN p.amount END) -
+                   SUM(CASE WHEN i.store_id = 2 THEN p.amount END)) AS difference
+          FROM     payment p
+          JOIN     rental r
+          ON       p.rental_id = r.rental_id
+          JOIN     inventory i
+          ON       i.inventory_id = r.inventory_id
+          JOIN     film_category fc
+          ON       fc.film_id = i.film_id
+          JOIN     category c
+          ON       c.category_id = fc.category_id
+          GROUP BY 1
+          ORDER BY 5 DESC
+          LIMIT    1),
+  payment_store_1
+AS
+  (
+          SELECT   DATE_TRUNC('day',p.payment_date) AS day_payment,
+                   i.store_id,
+                   acs.category_name,
+    	      	     SUM(p.amount)                    AS amount
+          FROM     payment p
+          JOIN     rental r
+          ON       p.rental_id = r.rental_id
+          JOIN     inventory i
+          ON       i.inventory_id = r.inventory_id
+          AND      i.store_id = 1
+          JOIN     film_category fc
+          ON       fc.film_id = i.film_id
+          JOIN     amount_category_store acs
+          ON       acs.category_id = fc.category_id
+          GROUP BY 1,
+                   2,
+                   3
+          ORDER BY 2,
+                   3,
+                   1),
+  payment_store_2
+AS
+  (       SELECT   DATE_TRUNC('day',p.payment_date) AS day_payment,
+                   i.store_id,
+                   acs.category_name,
+    	      	     SUM(p.amount)                    AS amount
+          FROM     payment p
+          JOIN     rental r
+          ON       p.rental_id = r.rental_id
+          JOIN     inventory i
+          ON       i.inventory_id = r.inventory_id
+          AND      i.store_id = 2
+          JOIN     film_category fc
+          ON       fc.film_id = i.film_id
+          JOIN     amount_category_store acs
+          ON       acs.category_id = fc.category_id
+          GROUP BY 1,
+                   2,
+                   3
+          ORDER BY 2,
+                   3,
+                   1)
+SELECT    t1.day_payment,
+          t1.category_name,
+          SUM(CASE WHEN t1.store_id = 1 THEN t1.amount END) AS amount_store_1,
+    	    SUM(CASE WHEN t1.store_id = 2 THEN t1.amount END) AS amount_store_2
+FROM
+    (
+          SELECT   *
+          FROM     payment_store_1
+          UNION
+          SELECT   *
+          FROM     payment_store_2
+          ORDER BY 2,
+                   3,
+                   1) t1
+GROUP BY  1,
+          2
+ORDER BY  1;
